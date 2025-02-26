@@ -1,15 +1,10 @@
 from flask import Flask, render_template, request, jsonify, session
-import random
+import ollama
 import time
-import wikipediaapi
+import random
 
 app = Flask(__name__)
-app.secret_key = "super_secret_key"
-
-wiki_wiki = wikipediaapi.Wikipedia(
-    user_agent="MyDebateApp/1.0 (https://github.com/your-repo; contact: your-email@example.com)", 
-    language="en"
-)
+app.secret_key = "super_secret_key"  # Required for session storage
 
 # Default debate topics
 DEBATE_TOPICS = [
@@ -20,7 +15,7 @@ DEBATE_TOPICS = [
     "Should governments impose stricter climate change policies?",
 ]
 
-# Opposing perspectives
+# Opposing perspectives for debates
 DEBATE_POSITIONS = [
     ("I strongly support this stance", "I completely oppose this viewpoint"),
     ("This approach is the future", "This approach is deeply flawed"),
@@ -28,99 +23,72 @@ DEBATE_POSITIONS = [
     ("We must embrace this technology", "We should be cautious about this technology"),
 ]
 
-# Wikipedia summary function
-def get_wikipedia_summary(topic):
-    page = wiki_wiki.page(topic)
-    return page.summary[:500] if page.exists() else None
+# Function to interact with Ollama (Llama 3)
+def ollama_generate_response(prompt, timeout=30):
+    try:
+        print(f"Attempting to generate response with prompt: {prompt[:100]}...") # Debug log
+        response = ollama.chat(
+            model="llama3",
+            messages=[{"role": "user", "content": prompt}],
+            options={"timeout": timeout}
+        )
+        print("Successfully generated response") # Debug log
+        return response['message']['content']
+    except Exception as e:
+        print(f"Error in ollama_generate_response: {str(e)}") # Debug log
+        raise
 
-# Mediator selects topic and positions
+# Mediator selects a debate topic and assigns positions
 def mediator_choose_topic(user_topic=None):
     topic = user_topic if user_topic else random.choice(DEBATE_TOPICS)
     position_a, position_b = random.choice(DEBATE_POSITIONS)
     return topic, position_a, position_b
 
-# Personality styles for the bots
-BOT_PERSONALITIES = {
-    "logical": {
-        "intro": ["From a purely logical perspective,", "If we analyze the facts,", "Based on reason and evidence,"],
-        "emphasis": ["It’s undeniable that", "We must acknowledge that", "It’s clear that"],
-        "response": ["Therefore,", "Logically speaking,", "Thus, the rational conclusion is that"]
-    },
-    "emotional": {
-        "intro": ["I feel strongly that", "It’s obvious to anyone that", "We can’t ignore that"],
-        "emphasis": ["Frankly,", "Truthfully,", "In all honesty,"],
-        "response": ["And that’s why", "It’s upsetting that", "It’s shocking that"]
-    },
-    "sarcastic": {
-        "intro": ["Oh, of course,", "Sure, let’s just ignore reality,", "As if"],
-        "emphasis": ["Clearly,", "Obviously,", "Yeah, right,"],
-        "response": ["And I’m sure that’ll work out great,", "Because history has never shown otherwise,", "That’s totally believable,"]
-    }
-}
-
-# Function to get a random tone
-def get_personality_tone(personality):
-    return random.choice(BOT_PERSONALITIES[personality]["intro"]), random.choice(BOT_PERSONALITIES[personality]["emphasis"]), random.choice(BOT_PERSONALITIES[personality]["response"])
-
-# Synonyms for avoiding topic repetition
-TOPIC_SYNONYMS = ["this issue", "this policy", "this technology", "this concept", "this strategy"]
-
-# Dynamic argument generator
-def format_natural_argument(topic, personality):
-    intro, emphasis, response = get_personality_tone(personality)
-    
-    topic_synonym = random.choice(TOPIC_SYNONYMS)
-    
-    argument_templates = [
-        f"{intro} {topic_synonym} is a game-changer because it impacts everything from education to healthcare.",
-        f"{emphasis} without {topic_synonym}, we risk falling behind in critical areas like technology and innovation.",
-        f"{response} the evidence overwhelmingly supports the benefits of adopting {topic_synonym}."
-    ]
-
-    return " ".join(random.sample(argument_templates, len(argument_templates)))  # Rearranges sentence order dynamically
-
-# Bot A: Argument with conversational personality
+# Bot A: Generate an argument using Llama 3
 def bot_a_argument(topic, position, previous_statement=None):
-    research = get_wikipedia_summary(topic)
-    personality = random.choice(["logical", "emotional"])  # Bot A is either logical or emotional
-    argument = format_natural_argument(topic, personality)
-
-    response = f"I strongly believe that {argument}"
-
-    if previous_statement:
-        response = f"I hear what you’re saying about '{previous_statement}', but I have to counter that: {argument}"
+    prompt = f"""
+    You are a skilled debater. The debate topic is '{topic}'.
+    You are arguing **in favor** of the position: '{position}'.
     
-    if research:
-        response += f" Also, according to Wikipedia, '{research}'"
+    - Construct a strong argument supporting this position.
+    - If the opponent previously said something, respond critically to their claim.
+    """
+    
+    if previous_statement:
+        prompt += f"\nOpponent's previous statement: '{previous_statement}'\nAddress their argument directly."
 
-    return response
+    argument = ollama_generate_response(prompt)
+    return argument
 
-# Bot B: Counterargument with sarcastic or logical personality
+# Bot B: Generate a counterargument using Llama 3
 def bot_b_counterargument(topic, position, previous_statement):
-    research = get_wikipedia_summary(topic)
-    personality = random.choice(["sarcastic", "logical"])  # Bot B can be sarcastic or logical
-    counter_argument = format_natural_argument(topic, personality)
-
-    response = f"I appreciate your enthusiasm, but let's be real. {counter_argument}"
-
-    if previous_statement:
-        response = f"You said '{previous_statement}', but let’s be honest: {counter_argument}"
-
-    if research:
-        response += f" In fact, Wikipedia states: '{research}'"
-
-    return response
-
-# Mediator compromise function
-def mediator_summarize_compromise(topic, argument_a, argument_b):
-    compromise_templates = [
-        f"A balanced approach to {topic} may involve partial regulation while allowing flexibility for innovation.",
-        f"While strong arguments exist on both sides, a middle-ground solution could be to implement trial policies before full-scale adoption of {topic}.",
-        f"Instead of a binary decision, {topic} could be adapted with safeguards to address concerns raised by both proponents and critics.",
-        f"The best path forward for {topic} might involve collaborative efforts between industry experts and policymakers to create a sustainable framework."
-    ]
+    prompt = f"""
+    You are a skilled debater. The debate topic is '{topic}'.
+    You are arguing **against** the position: '{position}'.
     
-    return f"Considering both perspectives on {topic}, a fair resolution could be: " + random.choice(compromise_templates)
+    - Construct a strong counterargument against this position.
+    - If the opponent previously said something, respond critically to their claim.
+    """
+    
+    if previous_statement:
+        prompt += f"\nOpponent's previous statement: '{previous_statement}'\nAddress their argument directly."
+
+    counter_argument = ollama_generate_response(prompt)
+    return counter_argument
+
+# Mediator: Generate a compromise based on both arguments
+def mediator_summarize_compromise(topic, argument_a, argument_b):
+    prompt = f"""
+    The debate topic is '{topic}'.
+    Bot A argued: '{argument_a}'
+    Bot B counter-argued: '{argument_b}'
+
+    - Your task is to generate a **compromise** between these two perspectives.
+    - The compromise should acknowledge the strengths of both arguments while suggesting a balanced resolution.
+    """
+    
+    compromise = ollama_generate_response(prompt)
+    return compromise
 
 @app.route("/")
 def index():
@@ -128,29 +96,59 @@ def index():
 
 @app.route("/generate", methods=["POST"])
 def generate():
-    user_data = request.get_json()
-    if not user_data:
-        return jsonify({"error": "Invalid request, no JSON received."}), 400
+    if session.get('generating'):
+        return jsonify({"error": "A debate is already being generated"}), 429
+    
+    try:
+        session['generating'] = True
+        print("Generate endpoint hit!") # Debug log
+        user_data = request.get_json()
+        if not user_data:
+            print("No JSON data received") # Debug log
+            return jsonify({"error": "Invalid request, no JSON received."}), 400
 
-    user_topic = user_data.get("user_topic", None)
-    topic, position_a, position_b = mediator_choose_topic(user_topic)
+        print(f"Received user data: {user_data}") # Debug log
+        user_topic = user_data.get("user_topic", None)
+        
+        print("Choosing topic...") # Debug log
+        topic, position_a, position_b = mediator_choose_topic(user_topic)
+        print(f"Selected topic: {topic}") # Debug log
 
-    argument_a = bot_a_argument(topic, position_a)
-    time.sleep(1)
-    argument_b = bot_b_counterargument(topic, position_b, argument_a)
+        print("Generating Bot A argument...") # Debug log
+        try:
+            argument_a = bot_a_argument(topic, position_a)
+            print("Bot A argument generated successfully") # Debug log
+        except Exception as e:
+            print(f"Error generating Bot A argument: {str(e)}") # Debug log
+            return jsonify({"error": "Failed to generate Bot A's argument"}), 500
 
-    session["topic"] = topic
-    session["position_a"] = position_a
-    session["position_b"] = position_b
-    session["arguments"] = [(argument_a, argument_b)]
-    session["iterations"] = 1
+        print("Generating Bot B argument...") # Debug log
+        try:
+            argument_b = bot_b_counterargument(topic, position_b, argument_a)
+            print("Bot B argument generated successfully") # Debug log
+        except Exception as e:
+            print(f"Error generating Bot B argument: {str(e)}") # Debug log
+            return jsonify({"error": "Failed to generate Bot B's argument"}), 500
 
-    return jsonify({
-        "topic": topic,
-        "position_a": position_a,
-        "position_b": position_b,
-        "arguments": session["arguments"]
-    })
+        # Store in session
+        session["topic"] = topic
+        session["position_a"] = position_a
+        session["position_b"] = position_b
+        session["arguments"] = [(argument_a, argument_b)]
+        session["iterations"] = 1
+
+        print("Successfully completed generate request") # Debug log
+        return jsonify({
+            "topic": topic,
+            "position_a": position_a,
+            "position_b": position_b,
+            "arguments": session["arguments"]
+        })
+    except Exception as e:
+        print(f"Error in generate endpoint: {str(e)}") # Debug log
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session['generating'] = False
 
 @app.route("/refine", methods=["POST"])
 def refine():
@@ -160,14 +158,12 @@ def refine():
     topic = session["topic"]
     position_a = session["position_a"]
     position_b = session["position_b"]
-    
+
     previous_argument_a, previous_argument_b = session["arguments"][-1]
 
-    summary_a = previous_argument_b.split(".")[0] if "." in previous_argument_b else previous_argument_b
-    summary_b = previous_argument_a.split(".")[0] if "." in previous_argument_a else previous_argument_a
-
-    argument_a = bot_a_argument(topic, position_a, summary_a)
-    argument_b = bot_b_counterargument(topic, position_b, summary_b)
+    # Generate new arguments based on previous round
+    argument_a = bot_a_argument(topic, position_a, previous_argument_b)
+    argument_b = bot_b_counterargument(topic, position_b, argument_a)
 
     session["arguments"].append((argument_a, argument_b))
     session["iterations"] += 1
@@ -178,17 +174,24 @@ def refine():
 
 @app.route("/compromise", methods=["POST"])
 def compromise():
-    if "iterations" not in session or session["iterations"] < 3:
-        return jsonify({"error": "More debate is needed before reaching a compromise."})
-
-    topic = session["topic"]
-    argument_a, argument_b = session["arguments"][-1]
-
-    compromise_statement = mediator_summarize_compromise(topic, argument_a, argument_b)
-
-    return jsonify({
-        "compromise": compromise_statement
-    })
+    if "topic" not in session:
+        return jsonify({"error": "No debate found, generate one first!"}), 400
+    
+    try:
+        topic = session["topic"]
+        # Get the last set of arguments from the debate
+        argument_a, argument_b = session["arguments"][-1]
+        
+        print("Generating compromise...") # Debug log
+        compromise_statement = mediator_summarize_compromise(topic, argument_a, argument_b)
+        print("Compromise generated successfully") # Debug log
+        
+        return jsonify({
+            "compromise": compromise_statement
+        })
+    except Exception as e:
+        print(f"Error generating compromise: {str(e)}") # Debug log
+        return jsonify({"error": f"Failed to generate compromise: {str(e)}"}), 500
 
 if __name__ == "__main__":
     app.run(debug=True)

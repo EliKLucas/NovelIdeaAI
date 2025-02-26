@@ -6,8 +6,116 @@
     <title>AI-Powered Debate</title>
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .debate-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            height: 90vh; /* Make container use 90% of viewport height */
+        }
+
+        .message-bubble {
+            max-width: 70%;
+            margin: 15px 0;
+            padding: 20px;
+            border-radius: 15px;
+            position: relative;
+            clear: both;
+        }
+
+        .bot-a-bubble {
+            float: left;
+            background-color: #007bff;
+            color: white;
+            border-bottom-left-radius: 5px;
+        }
+
+        .bot-b-bubble {
+            float: right;
+            background-color: #dc3545;
+            color: white;
+            border-bottom-right-radius: 5px;
+        }
+
+        .bot-label {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .compromise-bubble {
+            background-color: #6f42c1;
+            color: white;
+            max-width: 90%;
+            margin: 40px auto;
+            padding: 20px;
+            border-radius: 15px;
+            clear: both;
+        }
+
+        #debate-log {
+            height: calc(90vh * 6); /* 6 times the viewport height */
+            min-height: 4200px;
+            overflow-y: auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            margin: 20px 0;
+            width: 95%;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .message-bubble h4 {
+            color: inherit;
+            margin-top: 10px;
+            margin-bottom: 8px;
+            font-size: 1.1em;
+            font-weight: bold;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            padding-bottom: 5px;
+        }
+
+        .compromise-bubble h4 {
+            color: inherit;
+            margin-top: 10px;
+            margin-bottom: 8px;
+            font-size: 1.1em;
+            font-weight: bold;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            padding-bottom: 5px;
+        }
+
+        /* Clear fix for floating elements */
+        .clearfix::after {
+            content: "";
+            clear: both;
+            display: table;
+        }
+
+        /* Make the topic and controls more compact */
+        .controls-container {
+            max-width: 95%;
+            margin: 20px auto;
+        }
+
+        /* Make the text slightly larger */
+        .message-bubble p {
+            font-size: 1.1em;
+            line-height: 1.5;
+        }
+
+        /* Make sure the body and html can accommodate the taller content */
+        html, body {
+            height: auto;
+            min-height: 100%;
+        }
+
+        body {
+            padding-bottom: 40px;
+        }
+    </style>
 </head>
-<body class="container mt-5">
+<body class="container-fluid">
 
     <h1 class="text-center">AI-Powered Debate</h1>
 
@@ -31,31 +139,70 @@
 
     <!-- 🔹 JavaScript to handle AJAX requests -->
     <script>
+        function formatArgumentText(text) {
+            return text.replace(/\*\*(.*?)\*\*/g, '<h4>$1</h4>');
+        }
+
         $(document).ready(function() {
             $("#generate-btn").click(function() {
+                let button = $(this);
+                button.prop('disabled', true);
+                button.html('Generating...');
+                
                 let userTopic = $("#user-topic").val();
 
                 $.ajax({
                     url: "/generate",
                     type: "POST",
-                    contentType: "application/json",  // 🔹 Ensures JSON format is correct
-                    data: JSON.stringify({ user_topic: userTopic }),  // 🔹 Convert user input to JSON
+                    contentType: "application/json",
+                    data: JSON.stringify({ user_topic: userTopic }),
                     success: function(data) {
                         $("#topic").text(data.topic);
                         $("#debate-log").empty();
                         data.arguments.forEach(arg => {
-                            $("#debate-log").append("<p><strong>Bot A:</strong> " + arg[0] + "</p>");
-                            $("#debate-log").append("<p><strong>Bot B:</strong> " + arg[1] + "</p>");
+                            $("#debate-log").append(`
+                                <div class="debate-container">
+                                    <div class="message-bubble bot-a-bubble">
+                                        <div class="bot-label">Bot A:</div>
+                                        ${formatArgumentText(arg[0])}
+                                    </div>
+                                    <div class="message-bubble bot-b-bubble">
+                                        <div class="bot-label">Bot B:</div>
+                                        ${formatArgumentText(arg[1])}
+                                    </div>
+                                    <div class="clearfix"></div>
+                                </div>
+                            `);
                         });
-                        $("#refine-btn").prop("disabled", false);  // ✅ Enable "Continue Debate" button
+                        $("#refine-btn").prop("disabled", false);
+                        
+                        let debateLog = document.getElementById('debate-log');
+                        debateLog.scrollTop = debateLog.scrollHeight;
                     },
                     error: function(xhr, status, error) {
-                        alert("Error: " + xhr.responseText);
+                        console.error("Error details:", {xhr, status, error});
+                        let errorMessage = "An error occurred: ";
+                        if (xhr.responseJSON && xhr.responseJSON.error) {
+                            errorMessage += xhr.responseJSON.error;
+                        } else if (xhr.responseText) {
+                            errorMessage += xhr.responseText;
+                        } else {
+                            errorMessage += error || "Unknown error";
+                        }
+                        alert(errorMessage);
+                    },
+                    complete: function() {
+                        button.prop('disabled', false);
+                        button.html('Generate Debate');
                     }
                 });
             });
 
             $("#refine-btn").click(function() {
+                let button = $(this);
+                button.prop('disabled', true);
+                button.html('Generating Response...');
+                
                 $.ajax({
                     url: "/refine",
                     type: "POST",
@@ -63,20 +210,48 @@
                         if (data.error) {
                             alert(data.error);
                         } else {
-                            data.arguments.slice(-1).forEach(arg => {  // 🔹 Only append the latest arguments
-                                $("#debate-log").append("<p><strong>Bot A:</strong> " + arg[0] + "</p>");
-                                $("#debate-log").append("<p><strong>Bot B:</strong> " + arg[1] + "</p>");
+                            data.arguments.slice(-1).forEach(arg => {
+                                $("#debate-log").append(`
+                                    <div class="debate-container">
+                                        <div class="message-bubble bot-a-bubble">
+                                            <div class="bot-label">Bot A:</div>
+                                            ${formatArgumentText(arg[0])}
+                                        </div>
+                                        <div class="message-bubble bot-b-bubble">
+                                            <div class="bot-label">Bot B:</div>
+                                            ${formatArgumentText(arg[1])}
+                                        </div>
+                                        <div class="clearfix"></div>
+                                    </div>
+                                `);
                             });
-                            $("#compromise-btn").prop("disabled", false);  // ✅ Enable "Generate Compromise" button
+                            $("#compromise-btn").prop("disabled", false);
+                            
+                            let debateLog = document.getElementById('debate-log');
+                            debateLog.scrollTop = debateLog.scrollHeight;
                         }
                     },
                     error: function(xhr, status, error) {
-                        alert("Error: " + xhr.responseText);
+                        let errorMessage = "An error occurred: ";
+                        if (xhr.responseJSON && xhr.responseJSON.error) {
+                            errorMessage += xhr.responseJSON.error;
+                        } else {
+                            errorMessage += error;
+                        }
+                        alert(errorMessage);
+                    },
+                    complete: function() {
+                        button.prop('disabled', false);
+                        button.html('Continue Debate');
                     }
                 });
             });
 
             $("#compromise-btn").click(function() {
+                let button = $(this);
+                button.prop('disabled', true);
+                button.html('Generating Compromise...');
+                
                 $.ajax({
                     url: "/compromise",
                     type: "POST",
@@ -84,11 +259,26 @@
                         if (data.error) {
                             alert(data.error);
                         } else {
-                            $("#compromise").text(data.compromise);
+                            $("#compromise").html(`
+                                <div class="compromise-bubble">
+                                    <div class="bot-label">Compromise:</div>
+                                    ${formatArgumentText(data.compromise)}
+                                </div>
+                            `);
                         }
                     },
                     error: function(xhr, status, error) {
-                        alert("Error: " + xhr.responseText);
+                        let errorMessage = "An error occurred: ";
+                        if (xhr.responseJSON && xhr.responseJSON.error) {
+                            errorMessage += xhr.responseJSON.error;
+                        } else {
+                            errorMessage += error;
+                        }
+                        alert(errorMessage);
+                    },
+                    complete: function() {
+                        button.prop('disabled', false);
+                        button.html('Generate Compromise');
                     }
                 });
             });
