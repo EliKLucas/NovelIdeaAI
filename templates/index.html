@@ -3,47 +3,92 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Idea Generator</title>
+    <title>AI-Powered Debate</title>
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body class="container mt-5">
 
-    <h1 class="text-center">AI-Powered Idea Generator</h1>
+    <h1 class="text-center">AI-Powered Debate</h1>
 
     <div class="text-center">
-        <button id="generate-btn" class="btn btn-primary">Generate New Topics</button>
-        <button id="refine-btn" class="btn btn-secondary" disabled>Refine Relationship</button>
+        <input type="text" id="user-topic" class="form-control w-50 mx-auto mb-2" placeholder="Enter a debate topic (optional)">
+        <button id="generate-btn" class="btn btn-primary">Generate Debate</button>
+        <button id="refine-btn" class="btn btn-secondary" disabled>Continue Debate</button>
+        <button id="compromise-btn" class="btn btn-success" disabled>Generate Compromise</button>
     </div>
 
     <div id="output" class="mt-4">
-        <h3>Generated Topics:</h3>
-        <p id="topics">Click "Generate New Topics" to start.</p>
+        <h3>Debate Topic:</h3>
+        <p id="topic">Click "Generate Debate" to start.</p>
 
-        <h3>Initial Idea:</h3>
-        <p id="initial-idea"></p>
+        <h3>Debate Log:</h3>
+        <div id="debate-log" class="border p-3" style="height: 300px; overflow-y: auto; background-color: #f8f9fa;"></div>
 
-        <h3>Refined Idea:</h3>
-        <p id="refined-idea"></p>
+        <h3>Compromise:</h3>
+        <p id="compromise"></p>
     </div>
 
+    <!-- 🔹 JavaScript to handle AJAX requests -->
     <script>
         $(document).ready(function() {
             $("#generate-btn").click(function() {
-                $.post("/generate", function(data) {
-                    $("#topics").text(data.topic1 + " and " + data.topic2);
-                    $("#initial-idea").text(data.initial_idea);
-                    $("#refined-idea").text("");  // Clear previous refinements
-                    $("#refine-btn").prop("disabled", false);  // Enable refinement button
+                let userTopic = $("#user-topic").val();
+
+                $.ajax({
+                    url: "/generate",
+                    type: "POST",
+                    contentType: "application/json",  // 🔹 Ensures JSON format is correct
+                    data: JSON.stringify({ user_topic: userTopic }),  // 🔹 Convert user input to JSON
+                    success: function(data) {
+                        $("#topic").text(data.topic);
+                        $("#debate-log").empty();
+                        data.arguments.forEach(arg => {
+                            $("#debate-log").append("<p><strong>Bot A:</strong> " + arg[0] + "</p>");
+                            $("#debate-log").append("<p><strong>Bot B:</strong> " + arg[1] + "</p>");
+                        });
+                        $("#refine-btn").prop("disabled", false);  // ✅ Enable "Continue Debate" button
+                    },
+                    error: function(xhr, status, error) {
+                        alert("Error: " + xhr.responseText);
+                    }
                 });
             });
 
             $("#refine-btn").click(function() {
-                $.post("/refine", function(data) {
-                    if (data.error) {
-                        alert(data.error);
-                    } else {
-                        $("#refined-idea").text(data.refined_idea);
+                $.ajax({
+                    url: "/refine",
+                    type: "POST",
+                    success: function(data) {
+                        if (data.error) {
+                            alert(data.error);
+                        } else {
+                            data.arguments.slice(-1).forEach(arg => {  // 🔹 Only append the latest arguments
+                                $("#debate-log").append("<p><strong>Bot A:</strong> " + arg[0] + "</p>");
+                                $("#debate-log").append("<p><strong>Bot B:</strong> " + arg[1] + "</p>");
+                            });
+                            $("#compromise-btn").prop("disabled", false);  // ✅ Enable "Generate Compromise" button
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        alert("Error: " + xhr.responseText);
+                    }
+                });
+            });
+
+            $("#compromise-btn").click(function() {
+                $.ajax({
+                    url: "/compromise",
+                    type: "POST",
+                    success: function(data) {
+                        if (data.error) {
+                            alert(data.error);
+                        } else {
+                            $("#compromise").text(data.compromise);
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        alert("Error: " + xhr.responseText);
                     }
                 });
             });

@@ -1,138 +1,193 @@
 from flask import Flask, render_template, request, jsonify, session
 import random
-import requests
+import time
+import wikipediaapi
 
 app = Flask(__name__)
-app.secret_key = "super_secret_key"  # Required for storing session data
+app.secret_key = "super_secret_key"
 
-# Wikipedia API Helper Functions
+wiki_wiki = wikipediaapi.Wikipedia(
+    user_agent="MyDebateApp/1.0 (https://github.com/your-repo; contact: your-email@example.com)", 
+    language="en"
+)
+
+# Default debate topics
+DEBATE_TOPICS = [
+    "Should artificial intelligence be regulated?",
+    "Is social media beneficial or harmful to society?",
+    "Should cryptocurrency replace traditional banking?",
+    "Does technology improve human relationships?",
+    "Should governments impose stricter climate change policies?",
+]
+
+# Opposing perspectives
+DEBATE_POSITIONS = [
+    ("I strongly support this stance", "I completely oppose this viewpoint"),
+    ("This approach is the future", "This approach is deeply flawed"),
+    ("The economic benefits outweigh the risks", "The ethical concerns are too great"),
+    ("We must embrace this technology", "We should be cautious about this technology"),
+]
+
+# Wikipedia summary function
 def get_wikipedia_summary(topic):
-    url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{topic.replace(' ', '_')}"
+    page = wiki_wiki.page(topic)
+    return page.summary[:500] if page.exists() else None
 
-    try:
-        response = requests.get(url).json()
-        summary = response.get("extract")
+# Mediator selects topic and positions
+def mediator_choose_topic(user_topic=None):
+    topic = user_topic if user_topic else random.choice(DEBATE_TOPICS)
+    position_a, position_b = random.choice(DEBATE_POSITIONS)
+    return topic, position_a, position_b
 
-        if summary:
-            return summary.strip()
-        else:
-            return f"No Wikipedia summary available for {topic}."
+# Personality styles for the bots
+BOT_PERSONALITIES = {
+    "logical": {
+        "intro": ["From a purely logical perspective,", "If we analyze the facts,", "Based on reason and evidence,"],
+        "emphasis": ["It’s undeniable that", "We must acknowledge that", "It’s clear that"],
+        "response": ["Therefore,", "Logically speaking,", "Thus, the rational conclusion is that"]
+    },
+    "emotional": {
+        "intro": ["I feel strongly that", "It’s obvious to anyone that", "We can’t ignore that"],
+        "emphasis": ["Frankly,", "Truthfully,", "In all honesty,"],
+        "response": ["And that’s why", "It’s upsetting that", "It’s shocking that"]
+    },
+    "sarcastic": {
+        "intro": ["Oh, of course,", "Sure, let’s just ignore reality,", "As if"],
+        "emphasis": ["Clearly,", "Obviously,", "Yeah, right,"],
+        "response": ["And I’m sure that’ll work out great,", "Because history has never shown otherwise,", "That’s totally believable,"]
+    }
+}
 
-    except Exception as e:
-        print(f"Error fetching summary for {topic}: {e}")
-        return f"Could not retrieve Wikipedia summary for {topic}."
+# Function to get a random tone
+def get_personality_tone(personality):
+    return random.choice(BOT_PERSONALITIES[personality]["intro"]), random.choice(BOT_PERSONALITIES[personality]["emphasis"]), random.choice(BOT_PERSONALITIES[personality]["response"])
 
-def generate_topics():
-    url = "https://en.wikipedia.org/api/rest_v1/page/random/title"
+# Synonyms for avoiding topic repetition
+TOPIC_SYNONYMS = ["this issue", "this policy", "this technology", "this concept", "this strategy"]
+
+# Dynamic argument generator
+def format_natural_argument(topic, personality):
+    intro, emphasis, response = get_personality_tone(personality)
     
-    for _ in range(3):  # Try fetching valid topics up to 3 times
-        try:
-            response1 = requests.get(url).json()
-            response2 = requests.get(url).json()
-            
-            topic1 = response1.get("title", "").strip()
-            topic2 = response2.get("title", "").strip()
+    topic_synonym = random.choice(TOPIC_SYNONYMS)
+    
+    argument_templates = [
+        f"{intro} {topic_synonym} is a game-changer because it impacts everything from education to healthcare.",
+        f"{emphasis} without {topic_synonym}, we risk falling behind in critical areas like technology and innovation.",
+        f"{response} the evidence overwhelmingly supports the benefits of adopting {topic_synonym}."
+    ]
 
-            if topic1 and topic2 and topic1 != topic2:
-                return topic1, topic2  # Ensure topics are valid and not identical
+    return " ".join(random.sample(argument_templates, len(argument_templates)))  # Rearranges sentence order dynamically
 
-        except Exception as e:
-            print("Error fetching topics:", e)
+# Bot A: Argument with conversational personality
+def bot_a_argument(topic, position, previous_statement=None):
+    research = get_wikipedia_summary(topic)
+    personality = random.choice(["logical", "emotional"])  # Bot A is either logical or emotional
+    argument = format_natural_argument(topic, personality)
 
-    # If Wikipedia API fails 3 times, use fallback topics
-    fallback_topics = [
-        ("Artificial Intelligence", "Human Evolution"),
-        ("Quantum Mechanics", "Cryptocurrency"),
-        ("Ancient Philosophy", "Space Exploration"),
-        ("Neuroscience", "Virtual Reality"),
-        ("Genetic Engineering", "Cybersecurity")
+    response = f"I strongly believe that {argument}"
+
+    if previous_statement:
+        response = f"I hear what you’re saying about '{previous_statement}', but I have to counter that: {argument}"
+    
+    if research:
+        response += f" Also, according to Wikipedia, '{research}'"
+
+    return response
+
+# Bot B: Counterargument with sarcastic or logical personality
+def bot_b_counterargument(topic, position, previous_statement):
+    research = get_wikipedia_summary(topic)
+    personality = random.choice(["sarcastic", "logical"])  # Bot B can be sarcastic or logical
+    counter_argument = format_natural_argument(topic, personality)
+
+    response = f"I appreciate your enthusiasm, but let's be real. {counter_argument}"
+
+    if previous_statement:
+        response = f"You said '{previous_statement}', but let’s be honest: {counter_argument}"
+
+    if research:
+        response += f" In fact, Wikipedia states: '{research}'"
+
+    return response
+
+# Mediator compromise function
+def mediator_summarize_compromise(topic, argument_a, argument_b):
+    compromise_templates = [
+        f"A balanced approach to {topic} may involve partial regulation while allowing flexibility for innovation.",
+        f"While strong arguments exist on both sides, a middle-ground solution could be to implement trial policies before full-scale adoption of {topic}.",
+        f"Instead of a binary decision, {topic} could be adapted with safeguards to address concerns raised by both proponents and critics.",
+        f"The best path forward for {topic} might involve collaborative efforts between industry experts and policymakers to create a sustainable framework."
     ]
     
-    return random.choice(fallback_topics)
-
-
-# AI Bot A - Proposes Relationship
-def bot_a_propose_relationship(topic1, topic2):
-    summary1 = get_wikipedia_summary(topic1)
-    summary2 = get_wikipedia_summary(topic2)
-    return f"{topic1} ({summary1}) is connected to {topic2} ({summary2}) through shared themes in science, culture, or methodology."
-
-# AI Bot B - Critiques and Asks a Question
-def bot_b_critique_and_question(statement, topic1, topic2):
-    questions = [
-        f"How does {topic1} conceptually influence {topic2}?",
-        f"What real-world applications exist that link {topic1} and {topic2}?",
-        f"Are there any historical cases where {topic1} directly impacted {topic2}?",
-        f"How would a researcher prove that {topic1} and {topic2} are related?",
-        f"What underlying principles or theories make the relationship between {topic1} and {topic2} stronger?"
-    ]
-    return f"{statement} However, {random.choice(questions)}"
-
-# AI Bot A - Answers Its Own Question
-def bot_a_answer_question(statement, topic1, topic2):
-    answers = [
-        f"One example is how {topic1} has been studied in {topic2}-related fields.",
-        f"Researchers have found that {topic1} and {topic2} share common foundational concepts.",
-        f"Studies suggest that {topic1} might actually improve the way we approach {topic2}.",
-        f"There is evidence that {topic1} has contributed to advancements in {topic2}.",
-        f"In interdisciplinary studies, {topic1} has been used as a model for understanding {topic2}."
-    ]
-    return f"{statement} {random.choice(answers)}"
-
-# AI Bot B - Further Critiques and Expands
-def bot_b_critique_and_expand(statement, topic1, topic2):
-    critiques = [
-        f"This argument could be stronger by citing specific cases where {topic1} was applied to {topic2}.",
-        f"More details about how {topic1} is scientifically studied in relation to {topic2} would help.",
-        f"While {topic1} and {topic2} share some conceptual links, proving causation remains a challenge.",
-        f"A deeper exploration of how these fields have intersected in history would improve this connection.",
-        f"This relationship needs concrete examples to be truly convincing."
-    ]
-    return f"{statement} {random.choice(critiques)}"
+    return f"Considering both perspectives on {topic}, a fair resolution could be: " + random.choice(compromise_templates)
 
 @app.route("/")
 def index():
-    if "topics" not in session:
-        session["topics"] = generate_topics()
     return render_template("index.html")
 
 @app.route("/generate", methods=["POST"])
 def generate():
-    session["topics"] = generate_topics()
-    topic1, topic2 = session["topics"]
-    
-    # Start iterative refinement loop
-    initial_relationship = bot_a_propose_relationship(topic1, topic2)
-    critique1 = bot_b_critique_and_question(initial_relationship, topic1, topic2)
-    refined1 = bot_a_answer_question(critique1, topic1, topic2)
-    critique2 = bot_b_critique_and_expand(refined1, topic1, topic2)
-    
-    # Store latest refinement
-    session["relationship"] = critique2
+    user_data = request.get_json()
+    if not user_data:
+        return jsonify({"error": "Invalid request, no JSON received."}), 400
+
+    user_topic = user_data.get("user_topic", None)
+    topic, position_a, position_b = mediator_choose_topic(user_topic)
+
+    argument_a = bot_a_argument(topic, position_a)
+    time.sleep(1)
+    argument_b = bot_b_counterargument(topic, position_b, argument_a)
+
+    session["topic"] = topic
+    session["position_a"] = position_a
+    session["position_b"] = position_b
+    session["arguments"] = [(argument_a, argument_b)]
+    session["iterations"] = 1
 
     return jsonify({
-        "topic1": topic1,
-        "topic2": topic2,
-        "initial_idea": initial_relationship
+        "topic": topic,
+        "position_a": position_a,
+        "position_b": position_b,
+        "arguments": session["arguments"]
     })
 
 @app.route("/refine", methods=["POST"])
 def refine():
-    if "relationship" not in session:
-        return jsonify({"error": "No relationship found, generate topics first!"})
+    if "topic" not in session:
+        return jsonify({"error": "No debate found, generate one first!"})
 
-    topic1, topic2 = session["topics"]
+    topic = session["topic"]
+    position_a = session["position_a"]
+    position_b = session["position_b"]
+    
+    previous_argument_a, previous_argument_b = session["arguments"][-1]
 
-    # Continue iterative refinement loop
-    critique = bot_b_critique_and_question(session["relationship"], topic1, topic2)
-    refined = bot_a_answer_question(critique, topic1, topic2)
-    expanded = bot_b_critique_and_expand(refined, topic1, topic2)
+    summary_a = previous_argument_b.split(".")[0] if "." in previous_argument_b else previous_argument_b
+    summary_b = previous_argument_a.split(".")[0] if "." in previous_argument_a else previous_argument_a
 
-    # Store latest refinement
-    session["relationship"] = expanded
+    argument_a = bot_a_argument(topic, position_a, summary_a)
+    argument_b = bot_b_counterargument(topic, position_b, summary_b)
+
+    session["arguments"].append((argument_a, argument_b))
+    session["iterations"] += 1
 
     return jsonify({
-        "refined_idea": session["relationship"]
+        "arguments": session["arguments"]
+    })
+
+@app.route("/compromise", methods=["POST"])
+def compromise():
+    if "iterations" not in session or session["iterations"] < 3:
+        return jsonify({"error": "More debate is needed before reaching a compromise."})
+
+    topic = session["topic"]
+    argument_a, argument_b = session["arguments"][-1]
+
+    compromise_statement = mediator_summarize_compromise(topic, argument_a, argument_b)
+
+    return jsonify({
+        "compromise": compromise_statement
     })
 
 if __name__ == "__main__":
