@@ -41,6 +41,13 @@
             margin-bottom: 5px;
         }
 
+        .bot-style {
+            font-style: italic;
+            font-size: 0.9em;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
         .compromise-bubble {
             background-color: #6f42c1;
             color: white;
@@ -119,6 +126,20 @@
 
     <h1 class="text-center">AI-Powered Debate</h1>
 
+    <div id="auth-section" class="text-center mb-4">
+        <div id="login-form" class="mb-3">
+            <input type="text" id="username" placeholder="Username" class="form-control w-25 mx-auto mb-2">
+            <input type="password" id="password" placeholder="Password" class="form-control w-25 mx-auto mb-2">
+            <button id="login-btn" class="btn btn-primary">Login</button>
+            <button id="register-btn" class="btn btn-secondary">Register</button>
+        </div>
+        <div id="user-info" style="display: none;">
+            <p>Welcome, <span id="user-name"></span>!</p>
+            <p>Remaining Credits: <span id="remaining-credits">50</span></p>
+            <button id="logout-btn" class="btn btn-outline-danger">Logout</button>
+        </div>
+    </div>
+
     <div class="text-center">
         <input type="text" id="user-topic" class="form-control w-50 mx-auto mb-2" placeholder="Enter a debate topic (optional)">
         <button id="generate-btn" class="btn btn-primary">Generate Debate</button>
@@ -144,13 +165,56 @@
         }
 
         $(document).ready(function() {
+            // Auth functions
+            $("#login-btn").click(function() {
+                $.ajax({
+                    url: "/login",
+                    type: "POST",
+                    contentType: "application/json",
+                    data: JSON.stringify({
+                        username: $("#username").val(),
+                        password: $("#password").val()
+                    }),
+                    success: function(data) {
+                        $("#login-form").hide();
+                        $("#user-info").show();
+                        $("#user-name").text($("#username").val());
+                        $("#remaining-credits").text(data.credits);
+                        $("#generate-btn").prop("disabled", false);
+                    },
+                    error: function(xhr) {
+                        alert(xhr.responseJSON.error);
+                    }
+                });
+            });
+
+            $("#register-btn").click(function() {
+                $.ajax({
+                    url: "/register",
+                    type: "POST",
+                    contentType: "application/json",
+                    data: JSON.stringify({
+                        username: $("#username").val(),
+                        password: $("#password").val()
+                    }),
+                    success: function() {
+                        alert("Registration successful! Please login.");
+                    },
+                    error: function(xhr) {
+                        alert(xhr.responseJSON.error);
+                    }
+                });
+            });
+
+            // Update the generate button click handler
             $("#generate-btn").click(function() {
                 let button = $(this);
                 button.prop('disabled', true);
-                button.html('Generating...');
-                
-                let userTopic = $("#user-topic").val();
+                button.html('Bot A is preparing argument...');
 
+                let userTopic = $("#user-topic").val();
+                
+                // First, get Bot A's response
                 $.ajax({
                     url: "/generate",
                     type: "POST",
@@ -159,39 +223,46 @@
                     success: function(data) {
                         $("#topic").text(data.topic);
                         $("#debate-log").empty();
-                        data.arguments.forEach(arg => {
-                            $("#debate-log").append(`
-                                <div class="debate-container">
-                                    <div class="message-bubble bot-a-bubble">
-                                        <div class="bot-label">Bot A:</div>
-                                        ${formatArgumentText(arg[0])}
-                                    </div>
-                                    <div class="message-bubble bot-b-bubble">
-                                        <div class="bot-label">Bot B:</div>
-                                        ${formatArgumentText(arg[1])}
-                                    </div>
-                                    <div class="clearfix"></div>
+                        $("#debate-log").append(`
+                            <div class="debate-container">
+                                <div class="message-bubble bot-a-bubble">
+                                    <div class="bot-label">Bot A (${data.personality_a.name}):</div>
+                                    <div class="bot-style">${data.personality_a.style}</div>
+                                    ${formatArgumentText(data.argument_a)}
                                 </div>
-                            `);
-                        });
-                        $("#refine-btn").prop("disabled", false);
+                            </div>
+                        `);
                         
-                        let debateLog = document.getElementById('debate-log');
-                        debateLog.scrollTop = debateLog.scrollHeight;
+                        // Update button for Bot B
+                        button.html('Bot B is preparing counterargument...');
+                        
+                        // Then get Bot B's response
+                        $.ajax({
+                            url: "/counter_argument",
+                            type: "POST",
+                            contentType: "application/json",
+                            data: JSON.stringify({
+                                topic: data.topic,
+                                position_b: data.position_b,
+                                argument_a: data.argument_a
+                            }),
+                            success: function(counterData) {
+                                $("#debate-log").append(`
+                                    <div class="message-bubble bot-b-bubble">
+                                        <div class="bot-label">Bot B (${counterData.personality_b.name}):</div>
+                                        <div class="bot-style">${counterData.personality_b.style}</div>
+                                        ${formatArgumentText(counterData.argument_b)}
+                                    </div>
+                                `);
+                            },
+                            complete: function() {
+                                button.prop('disabled', false);
+                                button.html('Generate New Debate');
+                            }
+                        });
                     },
-                    error: function(xhr, status, error) {
-                        console.error("Error details:", {xhr, status, error});
-                        let errorMessage = "An error occurred: ";
-                        if (xhr.responseJSON && xhr.responseJSON.error) {
-                            errorMessage += xhr.responseJSON.error;
-                        } else if (xhr.responseText) {
-                            errorMessage += xhr.responseText;
-                        } else {
-                            errorMessage += error || "Unknown error";
-                        }
-                        alert(errorMessage);
-                    },
-                    complete: function() {
+                    error: function(xhr) {
+                        alert(xhr.responseJSON.error);
                         button.prop('disabled', false);
                         button.html('Generate Debate');
                     }
