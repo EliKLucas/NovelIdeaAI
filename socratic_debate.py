@@ -1,13 +1,14 @@
-import requests
+import aiohttp
+import asyncio
 from bs4 import BeautifulSoup
 import ollama
 import json
-import asyncio
 from datetime import datetime
 import random
 from typing import List, Dict, Tuple
 import logging
 import textwrap
+from difflib import SequenceMatcher
 
 # Configure logging
 logging.basicConfig(
@@ -21,23 +22,42 @@ class WikiTopicGenerator:
     
     async def get_random_topics(self, num_topics: int = 2) -> List[str]:
         topics = []
-        for _ in range(num_topics):
-            try:
-                response = requests.get(self.random_url, allow_redirects=True)
-                soup = BeautifulSoup(response.content, 'html.parser')
-                topic = soup.find(id='firstHeading').text
-                topics.append(topic)
-            except Exception as e:
-                logging.error(f"Error fetching Wikipedia topic: {e}")
-                topics.append("Backup Topic")
+        async with aiohttp.ClientSession() as session:
+            for _ in range(num_topics):
+                try:
+                    async with session.get(self.random_url, allow_redirects=True) as response:
+                        html = await response.text()
+                        soup = BeautifulSoup(html, 'html.parser')
+                        topic = soup.find(id='firstHeading').text
+                        topics.append(topic)
+                except Exception as e:
+                    logging.error(f"Error fetching Wikipedia topic: {e}")
+                    topics.append("Backup Topic")
         return topics
 
 class SocraticBot:
     def __init__(self, host: str = "http://207.211.161.65:8080"):
         self.client = ollama.Client(host=host)
+        self.perspectives = ["Functional", "Structural", "Psychological", "Historical", "Symbolic"]
         
-    async def generate_response(self, prompt: str, role: str) -> str:
+    def force_new_perspective(self) -> str:
+        """Selects a new perspective for the discussion if redundancy is detected."""
+        return random.choice(self.perspectives)
+    
+    def similarity_check(self, new_text: str, old_text: str) -> float:
+        """Compares similarity between two iterations."""
+        if not new_text or not old_text:
+            return 0
+        return SequenceMatcher(None, new_text, old_text).ratio() * 100
+
+    async def generate_response(self, prompt: str, role: str, previous_response: str = None) -> str:
         try:
+            # If there's high similarity with previous response, force a perspective shift
+            if previous_response and self.similarity_check(prompt, previous_response) > 80:
+                new_perspective = self.force_new_perspective()
+                prompt = f"Using a {new_perspective} perspective, {prompt}"
+                logging.info(f"Forcing new perspective: {new_perspective}")
+
             response = self.client.chat(
                 model="llama2",
                 messages=[{
@@ -90,7 +110,7 @@ class DiscussionManager:
             "iterations": []
         }
         self.wrapper = textwrap.TextWrapper(
-            width=80,  # adjust this number for your screen
+            width=80,
             initial_indent="    ",
             subsequent_indent="    ",
             break_long_words=False,
@@ -99,6 +119,8 @@ class DiscussionManager:
 
     def format_response(self, text: str) -> str:
         """Format response text to fit nicely on screen."""
+        if text is None:
+            return "No argument yet"
         return "\n".join(self.wrapper.fill(line) for line in text.split("\n"))
 
     async def run_discussion(self, max_iterations: int = 3):
@@ -164,14 +186,15 @@ Choose the strongest version and explain why. If the improvement is negligible, 
                 current_best_argument = refined
             elif "new connection" in decision.lower():
                 current_best_argument = connection
-            # If neither is better, keep the current best
+            # If neither is better, keep the current best (no change needed)
             
             self.session_log["iterations"].append(iteration_log)
             self.save_log()
             
             print("\n" + "="*80)
             print(f"Completed iteration {i + 1}")
-            print(f"Current best argument: {self.format_response(current_best_argument)}\n")
+            print(f"Current best argument: {self.format_response(current_best_argument)}")
+            print("="*80 + "\n")
 
     def save_log(self):
         try:
