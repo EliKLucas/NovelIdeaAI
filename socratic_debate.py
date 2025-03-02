@@ -9,8 +9,21 @@ from typing import List, Dict, Tuple
 import logging
 import textwrap
 from difflib import SequenceMatcher
-from sentence_transformers import SentenceTransformer
+from collections import Counter
 import numpy as np
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    print("""
+    Error: Required packages not installed.
+    Please run the following commands on your Oracle Cloud server:
+    
+    pip install sentence-transformers numpy
+    
+    Note: This will download the all-MiniLM-L6-v2 model (about 90MB) 
+    to ~/.cache/torch/sentence_transformers/
+    """)
+    raise
 
 # Configure logging
 logging.basicConfig(
@@ -37,12 +50,78 @@ class WikiTopicGenerator:
                     topics.append("Backup Topic")
         return topics
 
+class NoveltyDetector:
+    def __init__(self, embedding_model):
+        self.embedding_model = embedding_model
+        self.novelty_log = []
+    
+    def keyword_diversity(self, new_text: str, previous_text: str) -> float:
+        """Measures how different the word usage is between two texts."""
+        new_words = set(new_text.lower().split())
+        prev_words = set(previous_text.lower().split())
+        
+        overlap = len(new_words & prev_words) / max(len(new_words | prev_words), 1)
+        return 1 - overlap  # Higher value = more diverse
+
+    def topic_shift_penalty(self, new_text: str, previous_text: str) -> float:
+        """Encourages topic evolution by penalizing minimal change in word focus."""
+        new_word_counts = Counter(new_text.lower().split())
+        prev_word_counts = Counter(previous_text.lower().split())
+        
+        shared_words = sum(min(new_word_counts[w], prev_word_counts[w]) for w in new_word_counts)
+        total_words = sum(new_word_counts.values())
+        
+        return 1 - (shared_words / total_words)  # Higher value = stronger topic shift
+
+    def get_embedding(self, text: str) -> np.ndarray:
+        return self.embedding_model.encode(text)
+
+    def cosine_similarity(self, a: np.ndarray, b: np.ndarray) -> float:
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+    def novelty_score(self, new_text: str, previous_text: str) -> float:
+        """Combines semantic novelty, keyword diversity, and topic shift score."""
+        if not new_text or not previous_text:
+            return 1.0  # Assume novel if no prior comparison exists
+
+        sem_novelty = 1 - self.cosine_similarity(self.get_embedding(new_text), self.get_embedding(previous_text))
+        key_div = self.keyword_diversity(new_text, previous_text)
+        topic_shift = self.topic_shift_penalty(new_text, previous_text)
+
+        score = (sem_novelty * 0.5) + (key_div * 0.25) + (topic_shift * 0.25)  # Weighted combination
+        
+        self.novelty_log.append(score)
+        self._check_novelty_trend()
+        
+        return score
+
+    def _check_novelty_trend(self):
+        """Monitors novelty trends and suggests interventions."""
+        if len(self.novelty_log) > 5:  # Check last 5 iterations
+            avg_novelty = sum(self.novelty_log[-5:]) / 5
+            if avg_novelty < 0.15:
+                logging.warning("⚠️ Persistent novelty decline detected!")
+                return self._get_intervention()
+        return None
+
+    def _get_intervention(self) -> str:
+        """Returns a random intervention strategy when novelty is too low."""
+        interventions = [
+            "Provide a counterexample to challenge your previous argument.",
+            "Introduce an entirely new cultural analogy unrelated to previous themes.",
+            "Reformat your response into a structured debate: Claim → Counterpoint → Conclusion.",
+            "Consider an opposing viewpoint that directly challenges the main premise.",
+            "Analyze the topic through a completely different theoretical framework."
+        ]
+        return random.choice(interventions)
+
 class SocraticBot:
     def __init__(self, host: str = "http://207.211.161.65:8080"):
         self.client = ollama.Client(host=host)
         self.perspectives = ["Functional", "Structural", "Psychological", "Historical", "Symbolic"]
         # Load MiniLM model for embeddings
         self.embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        self.novelty_detector = NoveltyDetector(self.embedding_model)
         
     def get_embedding(self, text: str) -> np.ndarray:
         """Generate an embedding vector for a given text."""
@@ -90,14 +169,16 @@ class SocraticBot:
 
             # If there's a previous response, calculate novelty
             if previous_response:
-                novelty = self.novelty_score(response_text, previous_response)
+                novelty = self.novelty_detector.novelty_score(response_text, previous_response)
                 logging.info(f"Novelty Score: {novelty:.2f}")
 
                 # If novelty is too low, force a perspective shift
                 if novelty < 0.3:
+                    intervention = self.novelty_detector._get_intervention()
                     new_perspective = self.force_new_perspective()
-                    prompt = f"Using a {new_perspective} perspective, {prompt}"
+                    prompt = f"Using a {new_perspective} perspective and following this instruction: {intervention}\n{prompt}"
                     logging.info(f"Forcing new perspective: {new_perspective}")
+                    logging.info(f"Intervention: {intervention}")
 
                     response = self.client.chat(
                         model="llama2",
@@ -167,8 +248,70 @@ class DiscussionManager:
             return "No argument yet"
         return "\n".join(self.wrapper.fill(line) for line in text.split("\n"))
 
+    async def get_topics_from_input(self) -> List[str]:
+        """Handles various forms of user input to determine discussion topics."""
+        print("\nEnter two concepts to compare (press Enter for random topics)")
+        print("Examples: ")
+        print("- 'Compare cats and democracy'")
+        print("- 'quantum physics, jazz music'")
+        print("- 'relate A: coffee B: sunrise'")
+        print("- Just press Enter for random topics")
+        
+        user_input = input("\nYour input: ").strip()
+        
+        # Handle empty input - fetch both topics from Wikipedia
+        if not user_input or user_input.lower() in ['random', 'you decide', 'you choose']:
+            print("\nFetching random topics from Wikipedia...")
+            return await self.topic_generator.get_random_topics()
+        
+        # Try to extract two topics from various input formats
+        topics = []
+        
+        # Common separators and patterns
+        separators = ['and', ',', 'vs', 'versus', 'to', 'with', ';']
+        prefixes = ['compare', 'relate', 'connect', 'between']
+        
+        # Remove common prefixes
+        for prefix in prefixes:
+            if user_input.lower().startswith(prefix):
+                user_input = user_input[len(prefix):].strip()
+                break
+        
+        # Look for "A:" and "B:" pattern
+        if 'a:' in user_input.lower() and 'b:' in user_input.lower():
+            parts = user_input.lower().split('b:')
+            first = parts[0].split('a:')[1].strip()
+            second = parts[1].strip()
+            topics = [first, second]
+        else:
+            # Try common separators
+            for separator in separators:
+                if separator in user_input.lower():
+                    topics = [t.strip() for t in user_input.split(separator, 1)]
+                    break
+            
+            # If no separator found, treat the whole input as one topic
+            if not topics:
+                topics = [user_input.strip()]
+        
+        # If only one topic provided, ask for second
+        if len(topics) == 1:
+            print(f"\nGot first topic: {topics[0]}")
+            second_topic = input("Enter second topic (or press Enter to let me choose): ").strip()
+            
+            if not second_topic:
+                print("\nFinding a related topic...")
+                # Use Bot C to suggest a related topic
+                prompt = f"Given the concept '{topics[0]}', suggest a contrasting or complementary concept that would make for an interesting comparison. Respond with ONLY the concept, no explanation."
+                second_topic = await self.bot.generate_response(prompt, "decider")
+                print(f"I chose: {second_topic}")
+            
+            topics.append(second_topic)
+        
+        return topics
+
     async def run_discussion(self, max_iterations: int = 3):
-        self.session_log["topics"] = await self.topic_generator.get_random_topics()
+        self.session_log["topics"] = await self.get_topics_from_input()
         print("\n" + "="*80)
         print(f"Starting discussion with topics: {self.session_log['topics'][0]} and {self.session_log['topics'][1]}")
         print("="*80 + "\n")
@@ -190,25 +333,27 @@ class DiscussionManager:
                 prompt = f"Building upon this previous argument: '{current_best_argument}'\nRefine and improve this connection between {self.session_log['topics'][0]} and {self.session_log['topics'][1]}. Focus on making the connection more specific and stronger."
             
             connection = await self.bot.generate_response(prompt, "connector", current_best_argument)
-            connection_embedding = self.bot.get_embedding(connection)
+            connection_embedding = self.bot.novelty_detector.get_embedding(connection)
             print(f"\nBot A: {self.format_response(connection)}\n")
             iteration_log["bot_a_connection"] = connection
             
             # Novelty Check: Compare against previous best
             if current_best_embedding is not None:
-                novelty_score = self.bot.cosine_similarity(connection_embedding, current_best_embedding)
-                novelty_score = 1 - novelty_score  # Convert similarity to novelty
+                novelty_score = 1 - self.bot.novelty_detector.cosine_similarity(connection_embedding, current_best_embedding)
                 logging.info(f"Novelty Score for Iteration {i + 1}: {novelty_score:.2f}")
                 iteration_log["novelty_score"] = novelty_score
 
                 if novelty_score < 0.3:
                     print("\n🚨 Low novelty detected! Forcing a perspective shift...")
+                    intervention = self.bot.novelty_detector._get_intervention()
                     new_perspective = self.bot.force_new_perspective()
-                    prompt = f"Using a {new_perspective} perspective, {prompt}"
+                    prompt = f"Using a {new_perspective} perspective and following this instruction: {intervention}\n{prompt}"
+                    print(f"\nIntervention: {intervention}")
                     connection = await self.bot.generate_response(prompt, "connector")
                     print(f"\nBot A (New Perspective): {self.format_response(connection)}\n")
-                    connection_embedding = self.bot.get_embedding(connection)
+                    connection_embedding = self.bot.novelty_detector.get_embedding(connection)
                     iteration_log["perspective_shift"] = new_perspective
+                    iteration_log["intervention"] = intervention
             
             # Bot B: Evaluate
             print("\nBot B (Evaluator) is analyzing...")
@@ -246,7 +391,7 @@ Choose the strongest version and explain why. If the improvement is negligible, 
             # Update the current best argument based on Bot C's decision
             if "refined version" in decision.lower() or "refined argument" in decision.lower():
                 current_best_argument = refined
-                current_best_embedding = self.bot.get_embedding(refined)
+                current_best_embedding = self.bot.novelty_detector.get_embedding(refined)
             elif "new connection" in decision.lower():
                 current_best_argument = connection
                 current_best_embedding = connection_embedding
@@ -288,8 +433,35 @@ Choose the strongest version and explain why. If the improvement is negligible, 
             logging.error(f"Error saving log: {e}")
 
 async def main():
+    print("""
+🤖 Welcome to the Socratic Debate System! 🤖
+
+This system will generate an intelligent discussion between three AI bots:
+• Bot A (Connector): Finds connections between concepts
+• Bot B (Evaluator): Analyzes and critiques connections
+• Bot C (Decider): Guides discussion and ensures novelty
+
+The discussion can use:
+• Your chosen concepts
+• Random Wikipedia topics
+• A mix (you provide one, we choose one)
+    """)
+
     manager = DiscussionManager()
     await manager.run_discussion()
 
+    print("\nWould you like to start another discussion? (y/n)")
+    while input().lower().strip() in ['y', 'yes']:
+        await manager.run_discussion()
+        print("\nWould you like to start another discussion? (y/n)")
+
+    print("\nThank you for using the Socratic Debate System! 👋")
+
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n\nDiscussion terminated by user. Goodbye! 👋")
+    except Exception as e:
+        print(f"\n❌ An error occurred: {str(e)}")
+        logging.error(f"Error in main execution: {e}", exc_info=True) 
